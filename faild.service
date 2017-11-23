@@ -1,0 +1,12 @@
+[Unit]
+Description=Poor man's failover daemon
+After=network.target
+
+[Service]
+ExecStart=/bin/bash /usr/sbin/faild
+ExecReload=/bin/kill -HUP $MAINPID
+Type=idle
+PIDFile=/var/run/faild.pid
+
+[Install]
+WantedBy=default.target

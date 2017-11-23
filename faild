@@ -1,0 +1,134 @@
+#!/bin/bash
+
+readonly APP=`basename "$0"`
+
+CONF_FILE="/etc/${APP}.conf"
+PID_FILE="/var/run/${APP}.pid"
+
+readonly CONF_FILE="${1:-$CONF_FILE}"
+
+PING_TIMEOUT=10
+PING_COUNT=3
+CHECK_INTERVAL=1
+
+app_exit=0
+app_reload=0
+app_status=0
+
+# arping seems to uppercase MAC, so use:
+shopt -s nocasematch
+
+function error_log() {
+    (>&2 echo `date --rfc-3339=seconds`$" $1")
+}
+
+function check_remote_host () {
+    local mac=`arping -D -c $PING_COUNT -f -w $PING_TIMEOUT -I $3 $1`
+
+    if [[ $mac =~ $2 ]]; then
+        echo '1'
+    else
+        echo '0'
+    fi
+}
+
+function check_local_ip () {
+    local ip=`ip addr show dev $2`
+
+    if [[ $ip =~ $1 ]]; then
+        echo '1'
+    else
+        echo '0'
+    fi
+}
+
+function add_ip () {
+	local cmd_add_ip=`ip addr add $1/$2 dev $3 label $3:$4`
+
+	if [[ $? -eq 0 ]]; then
+        local cmd_arping=`arping -c $COUNT -w $TIMEOUT -I $3 -U $1`
+        error_log "Failover adding $1/$2 $3:$4"
+    else
+        error_log "Error    adding $1/$2 $3:$4 failed"
+    fi
+}
+
+function del_ip () {
+	local cmd_del_ip=`ip addr del $1/$2 dev $3`
+
+	if [[ $? -eq 0 ]]; then
+        error_log "Failback deleting $1/$2 from $3"
+    else
+        error_log "Error    deleting $1/$2 from $3 failed"
+    fi
+}
+
+function handle_host() {
+    local ip="$1"
+    local mask="$2"
+    local mac="$3"
+    local device="$4"
+    local alias="$5"
+    local status="$6"
+    local remote_active=$(check_remote_host $ip $mac $device)
+    local local_active=$(check_local_ip $ip $device)
+
+    if [[ $remote_active -eq 1 ]] && [[ $local_active -eq 1 ]]; then
+        $(del_ip $ip $mask $device)
+    elif [[ $remote_active -eq 0 ]] && [[ $local_active -eq 0 ]]; then
+        $(add_ip $ip $mask $device $alias)
+    fi
+
+    if [[ $status =~ 'status' ]]; then
+        error_log "Status   remote $ip/$mask: $remote_active, local $device:$alias: $local_active"
+    fi
+}
+
+if [[ ! -f $CONF_FILE ]]; then
+    error_log "Error    ${CONF_FILE} not found!"
+    error_log "Usage    ${APP} [/path/to/${APP}.conf]"
+    exit 1
+fi
+
+source "${CONF_FILE}"
+
+if [[ -f ${PID_FILE} ]]; then
+    error_log "Error    ${APP} already running with PID "`cat "${PID_FILE}"`
+    exit 1
+else
+    echo $$ > $PID_FILE
+    if [[ ! -f ${PID_FILE} ]]; then
+        error_log "Error    can't create ${PID_FILE}"
+        exit 1
+    fi
+fi
+
+trap 'app_exit=1' SIGINT SIGTERM
+trap 'app_reload=1' 1
+trap 'app_status=1' USR1
+
+while :; do
+    if [[ $app_exit -eq 1 ]]; then
+        error_log "Exiting"
+        rm -f "${PID_FILE}"
+        break
+    fi
+
+    if [[ $app_reload -eq 1 ]]; then
+        error_log "Action   Reloading config ${CONF_FILE}"
+        source "${CONF_FILE}"
+        app_reload=0
+    fi
+
+    param=''
+    if [[ $app_status -eq 1 ]]; then
+        param='status'
+        app_status=0
+    fi
+
+    for host in "${HOSTS[@]}"; do
+        handle_host $host $param &
+    done
+    wait
+    sleep $CHECK_INTERVAL
+done
