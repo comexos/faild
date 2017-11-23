@@ -4,14 +4,14 @@
 
 faild monitors nodes on the same network for availability and in case of errors tries to claim their ip addresses.
 This can be useful when there is no load balancer available or the setup of some cluster resource manager like pacemaker would be an overkill.
-The daemon is written in bash, for monitoring it uses arping, for assigning the ip addresses ip from iputils.
+The daemon is written in bash, for monitoring it uses arping provided by iputils, for assigning the ip addresses ip provided by iproute2.
 
 ## Getting started
 
 ### Requirements
 
 * bash >= 4
-* arping (from iputils)
+* arping (provided by iputils)
 * ip
 
 ### Installation
